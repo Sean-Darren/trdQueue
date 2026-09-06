@@ -1,0 +1,12 @@
+build/
+cmake-build-*/
+.cache/
+.idea/
+.vscode/*
+!.vscode/c_cpp_properties.json
+!.vscode/settings.json
+!.vscode/extensions.json
+*.user
+.DS_Store
+compile_commands.json
+CMakeUserPresets.json
