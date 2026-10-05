@@ -1,4 +1,4 @@
-#include "trdqueue/decimal.hpp"
+#include "coinbase_parse.hpp"
 #include "trdqueue/order_book.hpp"
 #include "trdqueue/spsc_ring_buffer.hpp"
 #include "trdqueue/types.hpp"
@@ -9,16 +9,13 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <vector>
 
-using trdqueue::BookLevel;
 using trdqueue::Event;
 using trdqueue::EventType;
-using trdqueue::LevelUpdate;
+using trdqueue::ExchangeMsgType;
 using trdqueue::OrderBook;
-using trdqueue::Side;
 using trdqueue::SpscRingBuffer;
-using trdqueue::parse_decimal_to_ticks;
+using trdqueue::parse_exchange_message;
 using trdqueue::ticks_to_decimal;
 
 namespace {
@@ -26,36 +23,6 @@ namespace {
 [[noreturn]] void die(const std::string& msg) {
     std::cerr << "error: " << msg << '\n';
     std::exit(1);
-}
-
-std::int64_t require_ticks(const std::string& s, const char* what) {
-    const auto v = parse_decimal_to_ticks(s);
-    if (!v) {
-        die(std::string("invalid ") + what + " '" + s + "'");
-    }
-    return *v;
-}
-
-Side require_side(const std::string& s) {
-    if (s == "buy") {
-        return Side::Buy;
-    }
-    if (s == "sell") {
-        return Side::Sell;
-    }
-    die("invalid side '" + s + "' (Exchange l2update uses buy/sell)");
-}
-
-std::vector<BookLevel> parse_levels(const nlohmann::json& arr) {
-    std::vector<BookLevel> out;
-    out.reserve(arr.size());
-    for (const auto& tuple : arr) {
-        BookLevel level{};
-        level.price_ticks = require_ticks(tuple.at(0).get<std::string>(), "price");
-        level.size_ticks = require_ticks(tuple.at(1).get<std::string>(), "size");
-        out.push_back(level);
-    }
-    return out;
 }
 
 void print_bbo(const OrderBook& book) {
@@ -92,25 +59,23 @@ int main(int argc, char** argv) {
     bool saw_snapshot = false;
 
     for (const auto& msg : root.at("messages")) {
-        const std::string type = msg.at("type").get<std::string>();
-        if (type == "snapshot") {
-            book.apply_snapshot(parse_levels(msg.at("bids")),
-                                parse_levels(msg.at("asks")));
+        const auto parsed = parse_exchange_message(msg);
+        if (!parsed.ok) {
+            die(parsed.error);
+        }
+        if (parsed.message.type == ExchangeMsgType::Snapshot) {
+            book.apply_snapshot(parsed.message.bids, parsed.message.asks);
             saw_snapshot = true;
             continue;
         }
-        if (type != "l2update") {
-            die("unsupported fixture message type '" + type + "'");
+        if (parsed.message.type != ExchangeMsgType::L2Update) {
+            die("unsupported fixture message type '" + parsed.message.type_name + "'");
         }
         if (!saw_snapshot) {
             die("l2update before snapshot");
         }
-        for (const auto& change : msg.at("changes")) {
-            LevelUpdate u{};
-            u.side = require_side(change.at(0).get<std::string>());
-            u.price_ticks = require_ticks(change.at(1).get<std::string>(), "price");
-            u.size_ticks = require_ticks(change.at(2).get<std::string>(), "size");
-            if (!ring.try_push(trdqueue::make_level_event(u))) {
+        for (const auto& update : parsed.message.changes) {
+            if (!ring.try_push(trdqueue::make_level_event(update))) {
                 die("ring dropped an incremental update (fixture is tiny; this is a bug)");
             }
         }
