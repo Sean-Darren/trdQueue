@@ -78,16 +78,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
-add_executable(trdqueue_tests
-  core/tests/test_ring_buffer.cpp
-  core/tests/test_order_book.cpp
-  core/tests/test_trade_tape.cpp
-  core/tests/test_decimal.cpp
-)
-target_link_libraries(trdqueue_tests PRIVATE trdqueue_core GTest::gtest_main)
-if(NOT MSVC)
-  target_compile_options(trdqueue_tests PRIVATE -Wall -Wextra -Wpedantic)
-endif()
 
 add_executable(trdqueue_tests
   core/tests/test_ring_buffer.cpp
@@ -101,6 +91,10 @@ target_link_libraries(trdqueue_tests PRIVATE trdqueue_core nlohmann_json::nlohma
 target_compile_definitions(trdqueue_tests PRIVATE
   TRDQUEUE_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/core/fixtures/book_updates.json"
 )
+if(NOT MSVC)
+  target_compile_options(trdqueue_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(trdqueue_tests)
+

@@ -3,4 +3,7 @@ CompileFlags:
     - -std=c++17
     - -xc++
     - -Icore/include
+    - -Iingest
+    - -Ibuild/_deps/ixwebsocket-src
+    - -Ibuild/_deps/nlohmann_json-src/include
   CompilationDatabase: build

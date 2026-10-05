@@ -10,6 +10,9 @@
   "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
   "C_Cpp.default.includePath": [
     "${workspaceFolder}/core/include",
+    "${workspaceFolder}/ingest",
+    "${workspaceFolder}/build/_deps/ixwebsocket-src",
+    "${workspaceFolder}/build/_deps/nlohmann_json-src/include",
     "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1"
   ],
   "C_Cpp.intelliSenseEngine": "disabled",
