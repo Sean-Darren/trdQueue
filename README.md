@@ -13,4 +13,4 @@ cmake --build build
 ./build/trdqueue_live ETH-USD
 ```
 
-Open http://127.0.0.1:8080. `GET /api/book` returns the same snapshot as JSON. Ctrl-C stops the feed.
+Open http://127.0.0.1:8080. `GET /api/book` returns the Coinbase quote as JSON. The same page accepts your own limit orders and matches them against each other when the prices cross. Ctrl-C stops the feed.

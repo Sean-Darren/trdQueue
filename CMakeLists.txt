@@ -16,6 +16,7 @@ endif()
 add_library(trdqueue_core
   core/src/order_book.cpp
   core/src/trade_tape.cpp
+  core/src/matching_engine.cpp
 )
 target_include_directories(trdqueue_core PUBLIC
   ${CMAKE_SOURCE_DIR}/core/include
@@ -53,6 +54,7 @@ add_executable(trdqueue_demo core/src/main.cpp)
 add_executable(trdqueue_live
   ingest/live_main.cpp
   ingest/dashboard.cpp
+  ingest/local_market.cpp
 )
 target_link_libraries(trdqueue_live PRIVATE trdqueue_core nlohmann_json::nlohmann_json ixwebsocket)
 target_include_directories(trdqueue_live PRIVATE ${CMAKE_SOURCE_DIR}/ingest)
@@ -87,8 +89,10 @@ add_executable(trdqueue_tests
   core/tests/test_order_book.cpp
   core/tests/test_trade_tape.cpp
   core/tests/test_decimal.cpp
+  core/tests/test_matching_engine.cpp
   ingest/test_coinbase_parse.cpp
   ingest/test_book_view.cpp
+  ingest/test_local_book.cpp
 )
 target_include_directories(trdqueue_tests PRIVATE ${CMAKE_SOURCE_DIR}/ingest)
 target_link_libraries(trdqueue_tests PRIVATE trdqueue_core nlohmann_json::nlohmann_json GTest::gtest_main)

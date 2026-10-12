@@ -1,6 +1,7 @@
 #include "book_view.hpp"
 #include "coinbase_parse.hpp"
 #include "dashboard.hpp"
+#include "local_market.hpp"
 #include "trdqueue/decimal.hpp"
 #include "trdqueue/order_book.hpp"
 #include "trdqueue/spsc_ring_buffer.hpp"
@@ -137,6 +138,11 @@ public:
             return false;
         }
         net_ready_ = true;
+        dashboard_.set_order_handler(
+            [this](const std::string& body) { return local_.submit_json(body); });
+        dashboard_.set_cancel_handler(
+            [this](const std::string& body) { return local_.cancel_json(body); });
+        dashboard_.set_local_snapshot([this]() { return local_.snapshot_json(); });
         if (!dashboard_.start()) {
             ix::uninitNetSystem();
             net_ready_ = false;
@@ -419,6 +425,7 @@ private:
     trdqueue::SpscRingBuffer<BookMsg*, 1024>& ring_;
     trdqueue::SpscRingBuffer<trdqueue::Trade, 1024>& trades_;
     ix::WebSocket ws_;
+    LocalMarket local_;
     Dashboard dashboard_;
     trdqueue::OrderBook book_;
     trdqueue::TradeTape tape_;

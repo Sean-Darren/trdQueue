@@ -38,6 +38,11 @@ const char* kPage = R"html(<!DOCTYPE html>
   .ask strong { color: #9c2f2f; }
   .quote em { font-style: normal; color: #5c564c; font-variant-numeric: tabular-nums; }
   h2 { font-size: 1rem; margin: 1.4rem 0 0.4rem; }
+  form { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: end; margin: 0.2rem 0 0.8rem; }
+  label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; color: #5c564c; }
+  input, select, button { font: inherit; color: inherit; background: #fffdf8; border: 1px solid #ddd6c8; border-radius: 0.35rem; padding: 0.4rem 0.55rem; }
+  button { cursor: pointer; }
+  #local-status { min-height: 1.2rem; margin: 0 0 0.6rem; }
   table { width: 100%; border-collapse: collapse; background: #fffdf8; border: 1px solid #ddd6c8; border-radius: 0.5rem; }
   th, td { text-align: left; padding: 0.45rem 0.7rem; font-variant-numeric: tabular-nums; }
   th { font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; color: #5c564c; font-weight: 600; }
@@ -59,6 +64,41 @@ const char* kPage = R"html(<!DOCTYPE html>
     <thead><tr><th>Maker</th><th>Price</th><th>Size</th><th>Trade</th></tr></thead>
     <tbody id="trades"></tbody>
     <caption>Side is the resting order on Coinbase.</caption>
+  </table>
+  <h2>Your orders</h2>
+  <p id="local-status">Place a limit order. It matches your other orders on this page.</p>
+  <form id="order-form">
+    <label>Side
+      <select id="order-side">
+        <option value="buy">Buy</option>
+        <option value="sell">Sell</option>
+      </select>
+    </label>
+    <label>Price <input id="order-price" inputmode="decimal" required></label>
+    <label>Size <input id="order-size" inputmode="decimal" required></label>
+    <button type="submit">Place limit order</button>
+  </form>
+  <div class="quotes">
+    <div>
+      <h2>Resting bids</h2>
+      <table>
+        <thead><tr><th>Price</th><th>Size</th><th>Id</th><th></th></tr></thead>
+        <tbody id="local-bids"></tbody>
+      </table>
+    </div>
+    <div>
+      <h2>Resting asks</h2>
+      <table>
+        <thead><tr><th>Price</th><th>Size</th><th>Id</th><th></th></tr></thead>
+        <tbody id="local-asks"></tbody>
+      </table>
+    </div>
+  </div>
+  <h2>Your fills</h2>
+  <table>
+    <thead><tr><th>Maker</th><th>Price</th><th>Size</th><th>Trade</th></tr></thead>
+    <tbody id="local-trades"></tbody>
+    <caption>A trade happens when your buy and sell prices cross. The price is the resting order's price.</caption>
   </table>
 </main>
 <script>
@@ -93,10 +133,86 @@ function render(view) {
     body.appendChild(row);
   }
 }
+function fillOrders(id, rows) {
+  const body = document.getElementById(id);
+  body.replaceChildren();
+  if (!rows || rows.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.className = "empty";
+    cell.textContent = "None";
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  for (const order of rows) {
+    const row = document.createElement("tr");
+    for (const value of [order.price, order.size, String(order.id)]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    const action = document.createElement("td");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Cancel";
+    button.addEventListener("click", () => postJson("/api/cancel", { order_id: order.id }));
+    action.appendChild(button);
+    row.appendChild(action);
+    body.appendChild(row);
+  }
+}
+function renderLocal(view) {
+  if (typeof view.message === "string" && view.message.length > 0) text("local-status", view.message);
+  fillOrders("local-bids", view.bids);
+  fillOrders("local-asks", view.asks);
+  const body = document.getElementById("local-trades");
+  body.replaceChildren();
+  const trades = view.trades || [];
+  if (trades.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.className = "empty";
+    cell.textContent = "No fills yet";
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  for (const trade of trades) {
+    const row = document.createElement("tr");
+    for (const value of [trade.side, trade.price, trade.size, String(trade.trade_id)]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    body.appendChild(row);
+  }
+}
+function postJson(path, payload) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }).then((res) => res.json()).then(renderLocal);
+}
+document.getElementById("order-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  postJson("/api/orders", {
+    side: document.getElementById("order-side").value,
+    price: document.getElementById("order-price").value.trim(),
+    size: document.getElementById("order-size").value.trim()
+  }).catch(() => text("local-status", "Could not place the order"));
+});
 function connect() {
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/");
   ws.onmessage = (event) => {
-    try { render(JSON.parse(event.data)); } catch (err) { text("status", "Bad update"); }
+    try {
+      const view = JSON.parse(event.data);
+      if (view.channel === "local") renderLocal(view);
+      else render(view);
+    } catch (err) { text("status", "Bad update"); }
   };
   ws.onclose = () => {
     text("status", "Reconnecting");
@@ -104,6 +220,7 @@ function connect() {
   };
 }
 fetch("/api/book").then((res) => res.json()).then(render).catch(() => {});
+fetch("/api/local").then((res) => res.json()).then(renderLocal).catch(() => {});
 connect();
 </script>
 </body>
@@ -152,6 +269,9 @@ bool Dashboard::start() {
                const ix::WebSocketMessagePtr& msg) {
             if (msg->type == ix::WebSocketMessageType::Open) {
                 web_socket.send(snapshot_json());
+                if (local_snapshot_) {
+                    web_socket.send(local_snapshot_());
+                }
             }
         });
 
@@ -184,16 +304,47 @@ void Dashboard::publish(const trdqueue::BookView& view) {
     broadcast(payload);
 }
 
-ix::HttpResponsePtr Dashboard::handle_http(ix::HttpRequestPtr request) const {
-    if (!request || request->method != "GET") {
+void Dashboard::set_order_handler(std::function<std::string(const std::string&)> handler) {
+    order_handler_ = std::move(handler);
+}
+
+void Dashboard::set_cancel_handler(std::function<std::string(const std::string&)> handler) {
+    cancel_handler_ = std::move(handler);
+}
+
+void Dashboard::set_local_snapshot(std::function<std::string()> snapshot) {
+    local_snapshot_ = std::move(snapshot);
+}
+
+ix::HttpResponsePtr Dashboard::handle_http(ix::HttpRequestPtr request) {
+    if (!request) {
         return json_response(404, "{}");
     }
     const std::string path = path_of(request->uri);
-    if (path.empty() || path == "/") {
-        return html_response();
+    if (request->method == "GET") {
+        if (path.empty() || path == "/") {
+            return html_response();
+        }
+        if (path == "/api/book") {
+            return json_response(200, snapshot_json());
+        }
+        if (path == "/api/local" && local_snapshot_) {
+            return json_response(200, local_snapshot_());
+        }
     }
-    if (path == "/api/book") {
-        return json_response(200, snapshot_json());
+    if (request->method == "POST" && path == "/api/orders" && order_handler_) {
+        const std::string body = order_handler_(request->body);
+        if (local_snapshot_) {
+            broadcast(local_snapshot_());
+        }
+        return json_response(200, body);
+    }
+    if (request->method == "POST" && path == "/api/cancel" && cancel_handler_) {
+        const std::string body = cancel_handler_(request->body);
+        if (local_snapshot_) {
+            broadcast(local_snapshot_());
+        }
+        return json_response(200, body);
     }
     return json_response(404, "{}");
 }
