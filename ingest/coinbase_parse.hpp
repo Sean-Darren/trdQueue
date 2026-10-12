@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@ namespace trdqueue {
 enum class ExchangeMsgType {
     Snapshot,
     L2Update,
+    Trade,
     Heartbeat,
     Subscriptions,
     Error,
@@ -29,6 +31,7 @@ struct ExchangeMessage {
     std::vector<BookLevel> bids;
     std::vector<BookLevel> asks;
     std::vector<LevelUpdate> changes;
+    trdqueue::Trade trade{};
 };
 
 struct ParseOutcome {
@@ -130,6 +133,36 @@ inline void read_product_id(const nlohmann::json& msg, ExchangeMessage& out) {
     }
 }
 
+inline bool read_trade_id(const nlohmann::json& value, std::int64_t& out, std::string& error) {
+    if (value.is_number_integer()) {
+        out = value.get<std::int64_t>();
+        return true;
+    }
+    if (value.is_number_unsigned()) {
+        const auto n = value.get<std::uint64_t>();
+        if (n > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+            error = "trade_id is out of range";
+            return false;
+        }
+        out = static_cast<std::int64_t>(n);
+        return true;
+    }
+    error = "trade_id is not an integer";
+    return false;
+}
+
+inline bool read_trade(const nlohmann::json& msg, Trade& out, std::string& error) {
+    if (!msg.contains("side") || !msg.contains("price") || !msg.contains("size") ||
+        !msg.contains("trade_id")) {
+        error = "trade is missing side, price, size, or trade_id";
+        return false;
+    }
+    return read_side(msg["side"], out.side, error) &&
+           read_ticks(msg["price"], out.price_ticks, "price", error) &&
+           read_ticks(msg["size"], out.size_ticks, "size", error) &&
+           read_trade_id(msg["trade_id"], out.trade_id, error);
+}
+
 }  // namespace coinbase_detail
 
 inline ParseOutcome parse_exchange_message(const nlohmann::json& msg) {
@@ -186,6 +219,14 @@ inline ParseOutcome parse_exchange_message(const nlohmann::json& msg) {
         }
         out.ok = true;
         out.message.type = ExchangeMsgType::L2Update;
+        return out;
+    }
+    if (type == "match" || type == "last_match") {
+        if (!coinbase_detail::read_trade(msg, out.message.trade, out.error)) {
+            return out;
+        }
+        out.ok = true;
+        out.message.type = ExchangeMsgType::Trade;
         return out;
     }
 

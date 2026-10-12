@@ -50,7 +50,10 @@ FetchContent_MakeAvailable(ixwebsocket)
 
 add_executable(trdqueue_demo core/src/main.cpp)
 
-add_executable(trdqueue_live ingest/live_main.cpp)
+add_executable(trdqueue_live
+  ingest/live_main.cpp
+  ingest/dashboard.cpp
+)
 target_link_libraries(trdqueue_live PRIVATE trdqueue_core nlohmann_json::nlohmann_json ixwebsocket)
 target_include_directories(trdqueue_live PRIVATE ${CMAKE_SOURCE_DIR}/ingest)
 if(NOT MSVC)
@@ -85,6 +88,7 @@ add_executable(trdqueue_tests
   core/tests/test_trade_tape.cpp
   core/tests/test_decimal.cpp
   ingest/test_coinbase_parse.cpp
+  ingest/test_book_view.cpp
 )
 target_include_directories(trdqueue_tests PRIVATE ${CMAKE_SOURCE_DIR}/ingest)
 target_link_libraries(trdqueue_tests PRIVATE trdqueue_core nlohmann_json::nlohmann_json GTest::gtest_main)

@@ -1,7 +1,10 @@
+#include "book_view.hpp"
 #include "coinbase_parse.hpp"
+#include "dashboard.hpp"
 #include "trdqueue/decimal.hpp"
 #include "trdqueue/order_book.hpp"
 #include "trdqueue/spsc_ring_buffer.hpp"
+#include "trdqueue/trade_tape.hpp"
 #include "trdqueue/types.hpp"
 
 #include <ixwebsocket/IXNetSystem.h>
@@ -29,6 +32,7 @@ extern "C" void on_signal(int) {
 
 constexpr const char* kFeedUrl = "wss://ws-feed.exchange.coinbase.com";
 constexpr std::int64_t kSilenceLimitMs = 5000;
+constexpr std::size_t kTapeCapacity = 32;
 
 struct BookMsg {
     std::uint64_t epoch = 0;
@@ -90,10 +94,42 @@ std::string format_level(bool has, std::int64_t price, std::int64_t size) {
     return trdqueue::ticks_to_decimal(price) + " x " + trdqueue::ticks_to_decimal(size);
 }
 
+trdqueue::BookView make_view(const std::string& product,
+                             bool book_live,
+                             const Top& top,
+                             const trdqueue::TradeTape& tape) {
+    trdqueue::BookView view;
+    view.product_id = product;
+    view.book_live = book_live;
+    if (top.has_bid) {
+        view.bid.present = true;
+        view.bid.price = trdqueue::ticks_to_decimal(top.bid_px);
+        view.bid.size = trdqueue::ticks_to_decimal(top.bid_sz);
+    }
+    if (top.has_ask) {
+        view.ask.present = true;
+        view.ask.price = trdqueue::ticks_to_decimal(top.ask_px);
+        view.ask.size = trdqueue::ticks_to_decimal(top.ask_sz);
+    }
+    view.trades.reserve(tape.size());
+    for (std::size_t i = tape.size(); i > 0; --i) {
+        const trdqueue::Trade& trade = tape.at(i - 1);
+        trdqueue::TradeView row;
+        row.side = trade.side == trdqueue::Side::Buy ? "buy" : "sell";
+        row.price = trdqueue::ticks_to_decimal(trade.price_ticks);
+        row.size = trdqueue::ticks_to_decimal(trade.size_ticks);
+        row.trade_id = trade.trade_id;
+        view.trades.push_back(std::move(row));
+    }
+    return view;
+}
+
 class LiveSession {
 public:
-    LiveSession(std::string product, trdqueue::SpscRingBuffer<BookMsg*, 1024>& ring)
-        : product_(std::move(product)), ring_(ring) {}
+    LiveSession(std::string product,
+                trdqueue::SpscRingBuffer<BookMsg*, 1024>& ring,
+                trdqueue::SpscRingBuffer<trdqueue::Trade, 1024>& trades)
+        : product_(std::move(product)), ring_(ring), trades_(trades), tape_(kTapeCapacity) {}
 
     bool start() {
         if (!ix::initNetSystem()) {
@@ -101,6 +137,12 @@ public:
             return false;
         }
         net_ready_ = true;
+        if (!dashboard_.start()) {
+            ix::uninitNetSystem();
+            net_ready_ = false;
+            return false;
+        }
+        publish();
         ws_.setUrl(kFeedUrl);
         ws_.setHandshakeTimeout(10);
         ws_.setOnMessageCallback(
@@ -120,6 +162,7 @@ public:
             started_ = false;
         }
         drain();
+        dashboard_.stop();
         if (net_ready_) {
             ix::uninitNetSystem();
             net_ready_ = false;
@@ -128,16 +171,22 @@ public:
 
     void pump_once() {
         check_silence();
+        bool worked = false;
         BookMsg* msg = nullptr;
-        if (!ring_.try_pop(msg)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            return;
-        }
-        do {
+        while (ring_.try_pop(msg)) {
             handle(msg);
             delete msg;
             msg = nullptr;
-        } while (ring_.try_pop(msg));
+            worked = true;
+        }
+        trdqueue::Trade trade{};
+        while (trades_.try_pop(trade)) {
+            on_trade(trade);
+            worked = true;
+        }
+        if (!worked) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
 
 private:
@@ -175,7 +224,7 @@ private:
         nlohmann::json sub;
         sub["type"] = "subscribe";
         sub["product_ids"] = nlohmann::json::array({product_});
-        sub["channels"] = nlohmann::json::array({"level2_batch", "heartbeat"});
+        sub["channels"] = nlohmann::json::array({"level2_batch", "heartbeat", "matches"});
         const ix::WebSocketSendInfo info = ws_.send(sub.dump());
         if (!info.success) {
             request_reconnect("failed to send subscribe");
@@ -219,6 +268,13 @@ private:
         booked->changes = message.changes;
         const bool snapshot = booked->snapshot;
         enqueue(std::move(booked), snapshot);
+    }
+
+    void on_trade_message(const trdqueue::ExchangeMessage& message) {
+        if (message.product_id != product_) {
+            return;
+        }
+        trades_.try_push(message.trade);
     }
 
     void on_message(const ix::WebSocketMessagePtr& msg) {
@@ -268,6 +324,10 @@ private:
             request_reconnect(detail.empty() ? "exchange error" : detail);
             return;
         }
+        if (parsed.message.type == ExchangeMsgType::Trade) {
+            on_trade_message(parsed.message);
+            return;
+        }
         on_book_message(parsed.message);
     }
 
@@ -297,9 +357,26 @@ private:
         std::cout.flush();
     }
 
+    void publish() {
+        dashboard_.publish(make_view(product_, book_live_, last_top_, tape_));
+    }
+
+    void on_trade(const trdqueue::Trade& trade) {
+        if (saw_trade_ && trade.trade_id == last_trade_id_) {
+            return;
+        }
+        tape_.push(trade);
+        last_trade_id_ = trade.trade_id;
+        saw_trade_ = true;
+        publish();
+    }
+
     void handle(BookMsg* msg) {
         if (msg->epoch != epoch_.load(std::memory_order_acquire)) {
-            book_live_ = false;
+            if (book_live_) {
+                book_live_ = false;
+                publish();
+            }
             return;
         }
         if (msg->snapshot) {
@@ -307,6 +384,7 @@ private:
             book_live_ = true;
             last_top_ = capture(book_);
             print_top();
+            publish();
             return;
         }
         if (!book_live_) {
@@ -319,6 +397,7 @@ private:
         if (top != last_top_) {
             last_top_ = top;
             print_top();
+            publish();
         }
     }
 
@@ -330,14 +409,23 @@ private:
             }
             delete msg;
         }
+        trdqueue::Trade trade{};
+        while (trades_.try_pop(trade)) {
+            on_trade(trade);
+        }
     }
 
     std::string product_;
     trdqueue::SpscRingBuffer<BookMsg*, 1024>& ring_;
+    trdqueue::SpscRingBuffer<trdqueue::Trade, 1024>& trades_;
     ix::WebSocket ws_;
+    Dashboard dashboard_;
     trdqueue::OrderBook book_;
+    trdqueue::TradeTape tape_;
     Top last_top_{};
     bool book_live_ = false;
+    bool saw_trade_ = false;
+    std::int64_t last_trade_id_ = 0;
     bool started_ = false;
     bool net_ready_ = false;
     std::atomic<bool> socket_open_{false};
@@ -365,7 +453,8 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, on_signal);
 
     trdqueue::SpscRingBuffer<BookMsg*, 1024> ring;
-    LiveSession session(product, ring);
+    trdqueue::SpscRingBuffer<trdqueue::Trade, 1024> trades;
+    LiveSession session(product, ring, trades);
     if (!session.start()) {
         return 1;
     }

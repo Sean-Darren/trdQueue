@@ -48,6 +48,26 @@ TEST(CoinbaseParse, RejectsBadPrice) {
     EXPECT_FALSE(parsed.ok);
 }
 
+TEST(CoinbaseParse, ParsesMatchTradeId) {
+    const auto parsed = trdqueue::parse_exchange_message(nlohmann::json::parse(
+        R"({"type":"match","trade_id":10,"product_id":"BTC-USD","size":"5.23512","price":"400.23","side":"sell"})"));
+    ASSERT_TRUE(parsed.ok) << parsed.error;
+    EXPECT_EQ(parsed.message.type, trdqueue::ExchangeMsgType::Trade);
+    EXPECT_EQ(parsed.message.trade.side, trdqueue::Side::Sell);
+    EXPECT_EQ(parsed.message.trade.trade_id, 10);
+    EXPECT_EQ(trdqueue::ticks_to_decimal(parsed.message.trade.price_ticks), "400.23");
+    EXPECT_EQ(trdqueue::ticks_to_decimal(parsed.message.trade.size_ticks), "5.23512");
+}
+
+TEST(CoinbaseParse, ParsesLastMatchAsTrade) {
+    const auto parsed = trdqueue::parse_exchange_message(nlohmann::json::parse(
+        R"({"type":"last_match","trade_id":11,"product_id":"BTC-USD","size":"0.01","price":"100","side":"buy"})"));
+    ASSERT_TRUE(parsed.ok) << parsed.error;
+    EXPECT_EQ(parsed.message.type, trdqueue::ExchangeMsgType::Trade);
+    EXPECT_EQ(parsed.message.trade.side, trdqueue::Side::Buy);
+    EXPECT_EQ(parsed.message.trade.trade_id, 11);
+}
+
 TEST(CoinbaseParse, HeartbeatIsNotABookUpdate) {
     const auto parsed = trdqueue::parse_exchange_message(nlohmann::json::parse(
         R"({"type":"heartbeat","product_id":"BTC-USD"})"));
